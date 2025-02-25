@@ -4,12 +4,14 @@ import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { CreditCard, Shield, GoalIcon as PaypalIcon, AppleIcon, CirclePlayIcon as GooglePayIcon } from "lucide-react"
+import { CreditCard, Shield } from "lucide-react"
 import { loadStripe } from "@stripe/stripe-js"
+import { Elements, useStripe, useElements, CardElement } from "@stripe/react-stripe-js"
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
 
 const courses = {
   "web-development": {
@@ -29,23 +31,25 @@ const courses = {
   }
 }
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
-
 export default function PaymentPage() {
+  return (
+    <Elements stripe={stripePromise}>
+      <CheckoutForm />
+    </Elements>
+  )
+}
+
+function CheckoutForm() {
+  const stripe = useStripe()
+  const elements = useElements()
   const params = useParams()
   const router = useRouter()
   const courseId = params.courseId as string
   const course = courses[courseId as keyof typeof courses]
-  
+
   const [paymentMethod, setPaymentMethod] = useState("card")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-  const [cardDetails, setCardDetails] = useState({
-    number: "",
-    expiry: "",
-    cvc: "",
-    name: ""
-  })
 
   if (!course) {
     return <div>Course not found</div>
@@ -56,15 +60,14 @@ export default function PaymentPage() {
     setError("")
 
     try {
-      const stripe = await stripePromise
-      if (!stripe) throw new Error("Stripe failed to initialize")
+      if (!stripe || !elements) {
+        throw new Error("Stripe has not loaded yet")
+      }
 
       // Create payment intent
       const response = await fetch("/api/create-payment-intent", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           courseId,
           amount: course.price * 100, // Convert to cents
@@ -78,18 +81,10 @@ export default function PaymentPage() {
 
       const { clientSecret } = await response.json()
 
-      // Confirm the payment
+      // Confirm the payment using Stripe Elements
       const { error: stripeError } = await stripe.confirmCardPayment(clientSecret, {
         payment_method: {
-          card: {
-            number: cardDetails.number,
-            exp_month: parseInt(cardDetails.expiry.split("/")[0]),
-            exp_year: parseInt(cardDetails.expiry.split("/")[1]),
-            cvc: cardDetails.cvc,
-          },
-          billing_details: {
-            name: cardDetails.name,
-          },
+          card: elements.getElement(CardElement)!, // Get card details securely
         },
       })
 
@@ -97,7 +92,6 @@ export default function PaymentPage() {
         throw new Error(stripeError.message)
       }
 
-      // Payment successful
       router.push(`/payment/${courseId}/success`)
     } catch (err: any) {
       setError(err.message)
@@ -111,16 +105,12 @@ export default function PaymentPage() {
     <div className="min-h-screen pt-20 pb-16">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
         <h1 className="text-3xl font-bold mb-8">Checkout</h1>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {/* Course Summary */}
           <Card className="p-6">
             <div className="aspect-video relative overflow-hidden rounded-lg mb-4">
-              <img
-                src={course.image}
-                alt={course.title}
-                className="object-cover w-full h-full"
-              />
+              <img src={course.image} alt={course.title} className="object-cover w-full h-full" />
             </div>
             <h2 className="text-xl font-semibold mb-2">{course.title}</h2>
             <div className="text-2xl font-bold text-primary">${course.price}</div>
@@ -137,19 +127,11 @@ export default function PaymentPage() {
                 <Shield className="h-5 w-5 text-primary" />
               </div>
 
-              {error && (
-                <Alert variant="destructive">
-                  {error}
-                </Alert>
-              )}
+              {error && <Alert variant="destructive">{error}</Alert>}
 
               <div className="space-y-4">
                 <Label>Payment Method</Label>
-                <RadioGroup
-                  value={paymentMethod}
-                  onValueChange={setPaymentMethod}
-                  className="grid grid-cols-2 gap-4"
-                >
+                <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod} className="grid grid-cols-2 gap-4">
                   <div className="flex items-center space-x-2 border rounded-lg p-4">
                     <RadioGroupItem value="card" id="card" />
                     <Label htmlFor="card" className="flex items-center gap-2">
@@ -168,59 +150,17 @@ export default function PaymentPage() {
 
                 {paymentMethod === "card" && (
                   <div className="space-y-4">
-                    <div>
-                      <Label htmlFor="cardName">Name on Card</Label>
-                      <Input
-                        id="cardName"
-                        value={cardDetails.name}
-                        onChange={(e) => setCardDetails({ ...cardDetails, name: e.target.value })}
-                        placeholder="John Doe"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="cardNumber">Card Number</Label>
-                      <Input
-                        id="cardNumber"
-                        value={cardDetails.number}
-                        onChange={(e) => setCardDetails({ ...cardDetails, number: e.target.value })}
-                        placeholder="1234 5678 9012 3456"
-                        required
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label htmlFor="cardExpiry">Expiry Date</Label>
-                        <Input
-                          id="cardExpiry"
-                          value={cardDetails.expiry}
-                          onChange={(e) => setCardDetails({ ...cardDetails, expiry: e.target.value })}
-                          placeholder="MM/YY"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor="cardCvc">CVC</Label>
-                        <Input
-                          id="cardCvc"
-                          value={cardDetails.cvc}
-                          onChange={(e) => setCardDetails({ ...cardDetails, cvc: e.target.value })}
-                          placeholder="123"
-                          required
-                        />
-                      </div>
+                    <Label>Card Details</Label>
+                    <div className="border p-3 rounded-lg">
+                      <CardElement options={{ hidePostalCode: true }} />
                     </div>
                   </div>
                 )}
 
-                <Button
-                  onClick={handlePayment}
-                  className="w-full text-lg h-12"
-                  disabled={loading}
-                >
+                <Button onClick={handlePayment} className="w-full text-lg h-12" disabled={loading}>
                   {loading ? "Processing..." : `Pay $${course.price}`}
                 </Button>
-                
+
                 <p className="text-sm text-muted-foreground text-center">
                   By clicking Pay, you agree to our Terms of Service and Privacy Policy
                 </p>
